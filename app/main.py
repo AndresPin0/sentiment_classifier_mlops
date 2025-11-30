@@ -1,6 +1,3 @@
-"""
-FastAPI application for sentiment classification using ONNX model.
-"""
 import os
 import logging
 from typing import Dict, List
@@ -9,7 +6,6 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 env_path = Path(__file__).parent.parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
@@ -38,18 +34,15 @@ MODEL_PATH = os.getenv("MODEL_PATH", "./models/model.onnx")
 PREDICTIONS_DEV_FILE = os.getenv("PREDICTIONS_DEV_FILE", "./logs/predicciones_dev.txt")
 PREDICTIONS_PROD_FILE = os.getenv("PREDICTIONS_PROD_FILE", "./logs/predicciones_prod.txt")
 
-# Select log file based on environment
 log_file = PREDICTIONS_DEV_FILE if ENVIRONMENT == "dev" else PREDICTIONS_PROD_FILE
 prediction_logger = PredictionLogger(environment=ENVIRONMENT, log_file_path=log_file)
 
 
 class TextInput(BaseModel):
-    """Input model for text classification."""
     text: str = Field(..., description="Text to classify", min_length=1, max_length=1000)
 
 
 class PredictionResponse(BaseModel):
-    """Response model for predictions."""
     text: str
     label: str
     score: float
@@ -58,7 +51,6 @@ class PredictionResponse(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize model on startup."""
     global model_loader
     try:
         logger.info(f"Initializing model - Path: {MODEL_PATH}, URL: {MODEL_URL}")
@@ -72,7 +64,6 @@ async def startup_event():
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "message": "Sentiment Classifier API",
         "environment": ENVIRONMENT,
@@ -82,7 +73,6 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     if model_loader is None or not model_loader.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
     return {
@@ -94,15 +84,6 @@ async def health_check():
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(input_data: TextInput):
-    """
-    Predict sentiment for given text.
-    
-    Args:
-        input_data: TextInput containing text to classify
-        
-    Returns:
-        PredictionResponse with label, score, and timestamp
-    """
     if model_loader is None or not model_loader.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
     
@@ -134,15 +115,6 @@ async def predict(input_data: TextInput):
 
 @app.post("/predict/batch")
 async def predict_batch(texts: List[str]):
-    """
-    Predict sentiment for multiple texts.
-    
-    Args:
-        texts: List of texts to classify
-        
-    Returns:
-        List of predictions
-    """
     if model_loader is None or not model_loader.is_loaded():
         raise HTTPException(status_code=503, detail="Model not loaded")
     

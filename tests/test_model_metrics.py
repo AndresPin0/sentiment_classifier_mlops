@@ -35,41 +35,76 @@ def test_data_path():
 
 @pytest.fixture
 def test_data(test_data_path):
-    """Load test data from parquet or json."""
     file_ext = Path(test_data_path).suffix.lower()
     
-    if file_ext == '.parquet':
-        # Load from parquet
-        df = pd.read_parquet(test_data_path)
-        
-        # Convert to dict format expected by tests
-        # Assume columns are 'text' and 'label' (or similar)
-        # Try common column names
-        text_col = None
-        label_col = None
-        
-        for col in df.columns:
-            col_lower = col.lower()
-            if text_col is None and ('text' in col_lower or 'sentence' in col_lower or 'review' in col_lower):
-                text_col = col
-            if label_col is None and ('label' in col_lower or 'sentiment' in col_lower or 'target' in col_lower):
-                label_col = col
-        
-        # If not found, use first two columns
-        if text_col is None:
-            text_col = df.columns[0]
-        if label_col is None:
-            label_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-        
-        return {
-            "texts": df[text_col].tolist(),
-            "labels": df[label_col].tolist()
-        }
+    if file_ext == '.parquet' or not file_ext:
+        try:
+            df = pd.read_parquet(test_data_path)
+            
+            text_col = None
+            label_col = None
+            
+            for col in df.columns:
+                col_lower = col.lower()
+                if text_col is None and ('text' in col_lower or 'sentence' in col_lower or 'review' in col_lower):
+                    text_col = col
+                if label_col is None and ('label' in col_lower or 'sentiment' in col_lower or 'target' in col_lower):
+                    label_col = col
+            
+            if text_col is None:
+                text_col = df.columns[0]
+            if label_col is None:
+                label_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+            
+            labels = df[label_col].tolist()
+            labels_binary = []
+            for label in labels:
+                if isinstance(label, str):
+                    if label.upper() == "POSITIVE":
+                        labels_binary.append(1)
+                    elif label.upper() == "NEGATIVE":
+                        labels_binary.append(0)
+                    else:
+                        labels_binary.append(1 if label.upper().startswith("POS") else 0)
+                else:
+                    labels_binary.append(1 if int(label) > 0 else 0)
+            
+            return {
+                "texts": df[text_col].tolist(),
+                "labels": labels_binary
+            }
+        except Exception as e:
+            try:
+                import pyarrow.parquet as pq
+                table = pq.read_table(test_data_path)
+                df = table.to_pandas()
+                
+                text_col = df.columns[0]
+                label_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+                
+                labels = df[label_col].tolist()
+                labels_binary = []
+                for label in labels:
+                    if isinstance(label, (int, float)):
+                        labels_binary.append(1 if int(label) > 0 else 0)
+                    elif isinstance(label, str):
+                        labels_binary.append(1 if label.upper() == "POSITIVE" else 0)
+                    else:
+                        labels_binary.append(1 if int(label) > 0 else 0)
+                
+                return {
+                    "texts": df[text_col].tolist(),
+                    "labels": labels_binary
+                }
+            except Exception as e2:
+                raise Exception(f"Could not load parquet file from {test_data_path}: {str(e)}, {str(e2)}")
     else:
-        # Fallback to JSON
-        with open(test_data_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data
+        try:
+            with open(test_data_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            raise Exception(f"Could not load JSON file from {test_data_path}: {str(e)}")
 
 
 @pytest.fixture
@@ -88,7 +123,6 @@ async def test_model_accuracy(model_loader, test_data):
     """
     min_accuracy = float(os.getenv("MIN_ACCURACY", "0.80"))
     
-    # Load test data
     texts = test_data.get("texts", [])
     true_labels = test_data.get("labels", [])
     
@@ -98,22 +132,20 @@ async def test_model_accuracy(model_loader, test_data):
     if len(texts) != len(true_labels):
         pytest.skip("Test data texts and labels have different lengths")
     
-    # Make predictions
     predicted_labels = []
     for text in texts:
         label, _ = model_loader.predict(text)
-        # Convert to binary (0: NEGATIVE, 1: POSITIVE)
         predicted_labels.append(1 if label == "POSITIVE" else 0)
     
-    # Convert true labels to binary if needed
     true_labels_binary = []
     for label in true_labels:
-        if isinstance(label, str):
+        if isinstance(label, (int, float)):
+            true_labels_binary.append(1 if int(label) > 0 else 0)
+        elif isinstance(label, str):
             true_labels_binary.append(1 if label.upper() == "POSITIVE" else 0)
         else:
             true_labels_binary.append(int(label))
     
-    # Calculate accuracy
     accuracy = accuracy_score(true_labels_binary, predicted_labels)
     
     print(f"\nModel Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
@@ -132,7 +164,6 @@ async def test_model_f1_score(model_loader, test_data):
     """
     min_f1 = float(os.getenv("MIN_F1", "0.80"))
     
-    # Load test data
     texts = test_data.get("texts", [])
     true_labels = test_data.get("labels", [])
     
@@ -142,21 +173,20 @@ async def test_model_f1_score(model_loader, test_data):
     if len(texts) != len(true_labels):
         pytest.skip("Test data texts and labels have different lengths")
     
-    # Make predictions
     predicted_labels = []
     for text in texts:
         label, _ = model_loader.predict(text)
         predicted_labels.append(1 if label == "POSITIVE" else 0)
     
-    # Convert true labels to binary
     true_labels_binary = []
     for label in true_labels:
-        if isinstance(label, str):
+        if isinstance(label, (int, float)):
+            true_labels_binary.append(1 if int(label) > 0 else 0)
+        elif isinstance(label, str):
             true_labels_binary.append(1 if label.upper() == "POSITIVE" else 0)
         else:
             true_labels_binary.append(int(label))
     
-    # Calculate F1 score
     f1 = f1_score(true_labels_binary, predicted_labels, average="weighted")
     
     print(f"\nModel F1 Score: {f1:.4f}")

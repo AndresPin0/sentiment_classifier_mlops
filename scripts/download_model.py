@@ -1,7 +1,3 @@
-"""
-Robust Google Drive downloader (handles large files + confirmation token).
-"""
-
 import os
 import re
 import sys
@@ -9,8 +5,6 @@ import requests
 from pathlib import Path
 from dotenv import load_dotenv
 
-
-# Load env
 env_path = Path(__file__).parent.parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
@@ -55,7 +49,6 @@ def download_file_from_google_drive(file_id, destination):
             stream=True
         )
 
-    # Validate that it is not HTML
     content_type = response.headers.get("Content-Type", "")
     if "text/html" in content_type.lower():
         raise ValueError("Received HTML instead of file (Drive blocked it).")
