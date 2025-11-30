@@ -2,8 +2,7 @@ name: CI/CD Pipeline - Prod
 
 on:
   push:
-    branches:
-      - prod
+    branches: [prod]
   workflow_dispatch:
 
 permissions:
@@ -16,230 +15,179 @@ env:
 
 jobs:
   test:
-    name: Test Model
+    name: Test Model (Prod strict)
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Download model
         env:
           MODEL_URL: ${{ secrets.MODEL_URL }}
         run: |
           mkdir -p models
-          python scripts/download_model.py || bash scripts/download_model.sh
-        continue-on-error: false
-      
+          python scripts/download_model.py
+
       - name: Download test data
         env:
           DATA_URL: ${{ secrets.DATA_URL }}
-          OUTPUT_PATH: ${{ env.TEST_DATA_PATH }}
         run: |
           mkdir -p test_data
-          python scripts/download_data.py || bash scripts/download_data.sh
-        continue-on-error: false
-      
+          python scripts/download_data.py
+
       - name: Run response tests
+        run: pytest tests/test_model_response.py -v
+
+      - name: Run metrics tests (Prod threshold)
         env:
-          MODEL_PATH: ${{ env.MODEL_PATH }}
-        run: |
-          pytest tests/test_model_response.py -v
-      
-      - name: Run metrics tests
-        env:
-          MODEL_PATH: ${{ env.MODEL_PATH }}
-          TEST_DATA_PATH: ${{ env.TEST_DATA_PATH }}
-          MIN_ACCURACY: ${{ secrets.MIN_ACCURACY || '0.80' }}
-          MIN_F1: ${{ secrets.MIN_F1 || '0.80' }}
-        run: |
-          pytest tests/test_model_metrics.py -v
-      
+          MIN_ACCURACY: 0.85
+          MIN_F1: 0.85
+        run: pytest tests/test_model_metrics.py -v
+
       - name: Run API tests
-        run: |
-          pytest tests/test_api.py -v
+        run: pytest tests/test_api.py -v
 
   build:
-    name: Build Docker Image
-    needs: test
+    name: Build Docker Image (Prod)
     runs-on: ubuntu-latest
-    
+    needs: test
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Build Docker image
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
+      - uses: actions/checkout@v3
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Build image
         run: |
           docker build \
             --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
             --build-arg ENVIRONMENT=prod \
             -t sentiment-classifier-prod:latest \
-            -t sentiment-classifier-prod:${{ github.sha }} \
-            .
-      
-      - name: Test Docker image
-        run: |
-          docker run -d \
-            -p 8000:8000 \
-            -e MODEL_URL="${{ secrets.MODEL_URL }}" \
-            -e ENVIRONMENT=prod \
-            -e PREDICTIONS_BUCKET="${{ secrets.PREDICTIONS_BUCKET }}" \
-            --name test-container \
-            sentiment-classifier-prod:latest
-          
-          # Wait for container to start
-          sleep 10
-          
-          # Test health endpoint
-          curl -f http://localhost:8000/health || exit 1
-          
-          # Cleanup
-          docker stop test-container
-          docker rm test-container
+            -t sentiment-classifier-prod:release-${{ github.run_number }} .
 
   deploy:
-    name: Deploy to Cloud
-    needs: build
+    name: Deploy Prod
     runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/prod'
-    
+
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY_PROD }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID_PROD }}
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:latest
-            ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:${{ github.sha }}
-          build-args: |
-            MODEL_URL=${{ secrets.MODEL_URL }}
-            ENVIRONMENT=prod
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache,mode=max
-      
-      - name: Deploy to Render
-        if: secrets.RENDER_API_KEY != '' && secrets.RENDER_SERVICE_ID != ''
+      - name: Deploy to Render (Prod)
+        if: env.RENDER_API_KEY != '' && env.RENDER_SERVICE_ID != ''
         run: |
-          curl -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+          curl -X POST "https://api.render.com/v1/services/${{ env.RENDER_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ env.RENDER_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache": true}'
-      
-      - name: Deploy placeholder
-        if: secrets.RENDER_API_KEY == '' || secrets.RENDER_SERVICE_ID == ''
-        run: |
-          echo "No deployment service configured."
-          echo "Configure Render deployment:"
-          echo "  - Add RENDER_API_KEY secret"
-          echo "  - Add RENDER_SERVICE_ID secret"
-          echo ""
-          echo "Docker image pushed to: ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:latest"
 
-  upload-predictions:
-    name: Upload Predictions to GitHub Release
-    needs: build
+  predictions:
+    name: Generate Predictions (Prod)
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/prod'
-    
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Build Docker image
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
+
+      - name: Build Docker image (for predictions)
         run: |
           docker build \
             --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
             --build-arg ENVIRONMENT=prod \
-            -t sentiment-classifier-prod:latest \
-            .
-      
-      - name: Generate test predictions
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
+            -t sentiment-classifier-prod:latest .
+
+      - name: Run container and generate predictions
         run: |
           docker run -d \
             -p 8000:8000 \
             -e MODEL_URL="${{ secrets.MODEL_URL }}" \
             -e ENVIRONMENT=prod \
             -e PREDICTIONS_PROD_FILE=/app/logs/predicciones_prod.txt \
-            --name predictions-container \
+            --name prod-container \
             sentiment-classifier-prod:latest
-          
-          # Wait for container to start
-          sleep 15
-          
-          # Make some test predictions
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "I love this product! It is amazing!"}' || true
-          
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "This is terrible. I hate it."}' || true
-          
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "Great service and excellent quality!"}' || true
-          
-          # Wait a bit for logs to be written
+
+          sleep 20
+
+          # -------- POSITIVOS --------
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Absolutely fantastic product, exceeded my expectations!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Loved the design and the performance is outstanding."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Customer support was quick and very helpful."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Great value for money, will buy again."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Delivery was fast and the item works perfectly."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Impressive quality and very easy to use."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Five stars, highly recommended!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The experience from purchase to delivery was excellent."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Build quality feels premium and durable."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I am extremely happy with this purchase."}'
+
+          # -------- NEGATIVOS --------
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"This product is terrible and completely useless."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Worst purchase I have ever made."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Customer service was unresponsive and unhelpful."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The item arrived broken and poorly packaged."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Very low quality, not worth the price."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I regret buying this, it does not work at all."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Disappointing experience from start to finish."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"It stopped working after just one day."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Absolutely awful, do not recommend."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"A complete waste of money."}'
+
+          # -------- MIXTOS / AMBIGUOS --------
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The product is okay, but the shipping was very slow."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Good performance, but the price seems too high."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"It works fine, nothing special though."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Design is nice but functionality is average."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Satisfied overall, although support could be better."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The features are good, but the setup was confusing."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Decent product, expected a little more."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Quality is acceptable, delivery was poor."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Not bad, but not great either."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Average experience, might try another brand next time."}'
+
+          # -------- INTENSIDAD ALTA --------
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I am absolutely thrilled, this is amazing!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I can't believe how bad this is!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"This changed the way I work, incredible!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Infuriating experience, nothing worked!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Beyond expectations, truly exceptional!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Utter disaster from minute one."}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"So happy I bought this!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Completely unacceptable quality!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Mind-blowing performance!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Angry and disappointed with the service."}'
+
           sleep 5
-          
-          # Copy predictions file from container
-          docker cp predictions-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || echo "No predictions file found"
-          
-          # Cleanup
-          docker stop predictions-container || true
-          docker rm predictions-container || true
-      
-      - name: Create or Update Release
+
+          # Copy predictions log and cleanup
+          docker cp prod-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || echo "No predictions file found"
+          docker stop prod-container || true
+          docker rm prod-container || true
+
+      - name: Upload predictions to GitHub Release (Prod)
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: prod-predictions-${{ github.sha }}
-          name: Prod Predictions - ${{ github.sha }}
+          tag_name: prod-predictions-${{ github.run_number }}
+          name: Prod Predictions
           body: |
-            Predictions log from production environment
-            
+            Predictions log from PROD environment
             Commit: ${{ github.sha }}
             Branch: ${{ github.ref }}
             Workflow: ${{ github.workflow }}
           files: predicciones_prod.txt
-          draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
