@@ -100,16 +100,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Build Docker image (for predictions)
+      - name: Build Docker image (Prod)
         run: |
           docker build \
             --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
             --build-arg ENVIRONMENT=prod \
             -t sentiment-classifier-prod:latest .
 
-      - name: Run container and generate predictions
+      - name: Run API Container
         run: |
           docker run -d \
             -p 8000:8000 \
@@ -119,70 +119,78 @@ jobs:
             --name prod-container \
             sentiment-classifier-prod:latest
 
+          echo "Waiting for API..."
           sleep 20
+          curl -f http://localhost:8000/health
 
-          # -------- POSITIVOS --------
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Absolutely fantastic product, exceeded my expectations!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Loved the design and the performance is outstanding."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Customer support was quick and very helpful."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Great value for money, will buy again."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Delivery was fast and the item works perfectly."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Impressive quality and very easy to use."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Five stars, highly recommended!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The experience from purchase to delivery was excellent."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Build quality feels premium and durable."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I am extremely happy with this purchase."}'
+      - name: Generate test predictions
+        run: |
+          echo "Creating input texts..."
+          cat << 'EOF' > texts.txt
+          Absolutely fantastic product, exceeded my expectations!
+          Loved the design and the performance is outstanding.
+          Customer support was quick and very helpful.
+          Great value for money, will buy again.
+          Delivery was fast and the item works perfectly.
+          Impressive quality and very easy to use.
+          Five stars, highly recommended!
+          The experience from purchase to delivery was excellent.
+          Build quality feels premium and durable.
+          I am extremely happy with this purchase.
+          This product is terrible and completely useless.
+          Worst purchase I have ever made.
+          Customer service was unresponsive and unhelpful.
+          The item arrived broken and poorly packaged.
+          Very low quality, not worth the price.
+          I regret buying this, it does not work at all.
+          Disappointing experience from start to finish.
+          It stopped working after just one day.
+          Absolutely awful, do not recommend.
+          A complete waste of money.
+          The product is okay, but the shipping was very slow.
+          Good performance, but the price seems too high.
+          It works fine, nothing special though.
+          Design is nice but functionality is average.
+          Satisfied overall, although support could be better.
+          The features are good, but the setup was confusing.
+          Decent product, expected a little more.
+          Quality is acceptable, delivery was poor.
+          Not bad, but not great either.
+          Average experience, might try another brand next time.
+          I am absolutely thrilled, this is amazing!
+          I can't believe how bad this is!
+          This changed the way I work, incredible!
+          Infuriating experience, nothing worked!
+          Beyond expectations, truly exceptional!
+          Utter disaster from minute one.
+          So happy I bought this!
+          Completely unacceptable quality!
+          Mind-blowing performance!
+          Angry and disappointed with the service.
+          EOF
 
-          # -------- NEGATIVOS --------
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"This product is terrible and completely useless."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Worst purchase I have ever made."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Customer service was unresponsive and unhelpful."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The item arrived broken and poorly packaged."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Very low quality, not worth the price."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I regret buying this, it does not work at all."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Disappointing experience from start to finish."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"It stopped working after just one day."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Absolutely awful, do not recommend."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"A complete waste of money."}'
+          echo "Sending texts to API..."
+          while read -r text; do
+            curl -s -X POST http://localhost:8000/predict \
+              -H "Content-Type: application/json" \
+              -d "{\"text\":\"$text\"}" || true
+            sleep 0.3
+          done < texts.txt
 
-          # -------- MIXTOS / AMBIGUOS --------
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The product is okay, but the shipping was very slow."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Good performance, but the price seems too high."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"It works fine, nothing special though."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Design is nice but functionality is average."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Satisfied overall, although support could be better."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"The features are good, but the setup was confusing."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Decent product, expected a little more."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Quality is acceptable, delivery was poor."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Not bad, but not great either."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Average experience, might try another brand next time."}'
-
-          # -------- INTENSIDAD ALTA --------
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I am absolutely thrilled, this is amazing!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"I can't believe how bad this is!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"This changed the way I work, incredible!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Infuriating experience, nothing worked!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Beyond expectations, truly exceptional!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Utter disaster from minute one."}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"So happy I bought this!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Completely unacceptable quality!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Mind-blowing performance!"}'
-          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Angry and disappointed with the service."}'
-
-          sleep 5
-
-          # Copy predictions log and cleanup
+      - name: Copy prediction log
+        run: |
           docker cp prod-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || echo "No predictions file found"
           docker stop prod-container || true
           docker rm prod-container || true
 
-      - name: Upload predictions to GitHub Release (Prod)
+      - name: Upload predictions to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: prod-predictions-${{ github.run_number }}
           name: Prod Predictions
           body: |
             Predictions log from PROD environment
+
             Commit: ${{ github.sha }}
             Branch: ${{ github.ref }}
             Workflow: ${{ github.workflow }}
@@ -190,4 +198,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
