@@ -2,8 +2,7 @@ name: CI/CD Pipeline - Prod
 
 on:
   push:
-    branches:
-      - prod
+    branches: [prod]
   workflow_dispatch:
 
 permissions:
@@ -16,230 +15,116 @@ env:
 
 jobs:
   test:
-    name: Test Model
+    name: Test Model (Prod strict)
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Download model
         env:
           MODEL_URL: ${{ secrets.MODEL_URL }}
         run: |
           mkdir -p models
-          python scripts/download_model.py || bash scripts/download_model.sh
-        continue-on-error: false
-      
+          python scripts/download_model.py
+
       - name: Download test data
         env:
           DATA_URL: ${{ secrets.DATA_URL }}
-          OUTPUT_PATH: ${{ env.TEST_DATA_PATH }}
         run: |
           mkdir -p test_data
-          python scripts/download_data.py || bash scripts/download_data.sh
-        continue-on-error: false
-      
+          python scripts/download_data.py
+
       - name: Run response tests
+        run: pytest tests/test_model_response.py -v
+
+      - name: Run metrics tests (Prod threshold)
         env:
-          MODEL_PATH: ${{ env.MODEL_PATH }}
-        run: |
-          pytest tests/test_model_response.py -v
-      
-      - name: Run metrics tests
-        env:
-          MODEL_PATH: ${{ env.MODEL_PATH }}
-          TEST_DATA_PATH: ${{ env.TEST_DATA_PATH }}
-          MIN_ACCURACY: ${{ secrets.MIN_ACCURACY || '0.80' }}
-          MIN_F1: ${{ secrets.MIN_F1 || '0.80' }}
-        run: |
-          pytest tests/test_model_metrics.py -v
-      
+          MIN_ACCURACY: 0.85
+          MIN_F1: 0.85
+        run: pytest tests/test_model_metrics.py -v
+
       - name: Run API tests
-        run: |
-          pytest tests/test_api.py -v
+        run: pytest tests/test_api.py -v
 
   build:
-    name: Build Docker Image
-    needs: test
+    name: Build Docker Image (Prod)
     runs-on: ubuntu-latest
-    
+    needs: test
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Build Docker image
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
+      - uses: actions/checkout@v3
+      - uses: docker/setup-buildx-action@v2
+
+      - name: Build image
         run: |
           docker build \
             --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
             --build-arg ENVIRONMENT=prod \
             -t sentiment-classifier-prod:latest \
-            -t sentiment-classifier-prod:${{ github.sha }} \
-            .
-      
-      - name: Test Docker image
-        run: |
-          docker run -d \
-            -p 8000:8000 \
-            -e MODEL_URL="${{ secrets.MODEL_URL }}" \
-            -e ENVIRONMENT=prod \
-            -e PREDICTIONS_BUCKET="${{ secrets.PREDICTIONS_BUCKET }}" \
-            --name test-container \
-            sentiment-classifier-prod:latest
-          
-          # Wait for container to start
-          sleep 10
-          
-          # Test health endpoint
-          curl -f http://localhost:8000/health || exit 1
-          
-          # Cleanup
-          docker stop test-container
-          docker rm test-container
+            -t sentiment-classifier-prod:release-${{ github.run_number }} .
 
   deploy:
-    name: Deploy to Cloud
-    needs: build
+    name: Deploy Prod
     runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/prod'
-    
+
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY_PROD }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID_PROD }}
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:latest
-            ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:${{ github.sha }}
-          build-args: |
-            MODEL_URL=${{ secrets.MODEL_URL }}
-            ENVIRONMENT=prod
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache,mode=max
-      
-      - name: Deploy to Render
-        if: secrets.RENDER_API_KEY != '' && secrets.RENDER_SERVICE_ID != ''
+      - name: Deploy to Render (Prod)
+        if: env.RENDER_API_KEY != '' && env.RENDER_SERVICE_ID != ''
         run: |
-          curl -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+          curl -X POST "https://api.render.com/v1/services/${{ env.RENDER_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ env.RENDER_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache": true}'
-      
-      - name: Deploy placeholder
-        if: secrets.RENDER_API_KEY == '' || secrets.RENDER_SERVICE_ID == ''
-        run: |
-          echo "No deployment service configured."
-          echo "Configure Render deployment:"
-          echo "  - Add RENDER_API_KEY secret"
-          echo "  - Add RENDER_SERVICE_ID secret"
-          echo ""
-          echo "Docker image pushed to: ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:latest"
 
-  upload-predictions:
-    name: Upload Predictions to GitHub Release
-    needs: build
+  predictions:
+    name: Generate Predictions (Prod)
     runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/prod'
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Build Docker image
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
+      - uses: actions/checkout@v3
+
+      - name: Run container and log predictions
         run: |
-          docker build \
-            --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
-            --build-arg ENVIRONMENT=prod \
-            -t sentiment-classifier-prod:latest \
-            .
-      
-      - name: Generate test predictions
-        env:
-          MODEL_URL: ${{ secrets.MODEL_URL }}
-        run: |
-          docker run -d \
-            -p 8000:8000 \
+          docker run -d -p 8000:8000 \
             -e MODEL_URL="${{ secrets.MODEL_URL }}" \
             -e ENVIRONMENT=prod \
             -e PREDICTIONS_PROD_FILE=/app/logs/predicciones_prod.txt \
-            --name predictions-container \
+            --name prod-container \
             sentiment-classifier-prod:latest
-          
-          # Wait for container to start
-          sleep 15
-          
-          # Make some test predictions
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "I love this product! It is amazing!"}' || true
-          
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "This is terrible. I hate it."}' || true
-          
-          curl -X POST http://localhost:8000/predict \
-            -H "Content-Type: application/json" \
-            -d '{"text": "Great service and excellent quality!"}' || true
-          
-          # Wait a bit for logs to be written
-          sleep 5
-          
-          # Copy predictions file from container
-          docker cp predictions-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || echo "No predictions file found"
-          
-          # Cleanup
-          docker stop predictions-container || true
-          docker rm predictions-container || true
-      
-      - name: Create or Update Release
+
+          sleep 20
+
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Amazing service!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Completely unusable"}'
+
+          docker cp prod-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || true
+          docker stop prod-container || true
+          docker rm prod-container || true
+
+      - name: Upload predictions to release (Prod)
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: prod-predictions-${{ github.sha }}
-          name: Prod Predictions - ${{ github.sha }}
-          body: |
-            Predictions log from production environment
-            
-            Commit: ${{ github.sha }}
-            Branch: ${{ github.ref }}
-            Workflow: ${{ github.workflow }}
+          tag_name: prod-predictions-${{ github.run_number }}
+          name: Prod Predictions
           files: predicciones_prod.txt
-          draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
-
