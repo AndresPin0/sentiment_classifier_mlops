@@ -153,10 +153,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Build Docker image
+        env:
+          MODEL_URL: ${{ secrets.MODEL_URL }}
+        run: |
+          docker build \
+            --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
+            --build-arg ENVIRONMENT=dev \
+            -t sentiment-classifier-dev:latest \
+            .
+      
       - name: Get predictions log
         env:
           MODEL_URL: ${{ secrets.MODEL_URL }}
-
         run: |
           docker run -d \
             -p 8000:8000 \
