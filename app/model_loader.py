@@ -59,10 +59,10 @@ class ONNXModelLoader:
             logger.info(f"Model downloaded successfully to: {self.model_path}")
             
         except ImportError:
-            # Fallback to manual download
-            logger.warning("Could not import download script, trying manual download...")
-            import gdown
+            # Fallback to manual download using requests
+            logger.warning("Could not import download script, trying manual download with requests...")
             import requests
+            import re
             
             # Try to extract file ID from Google Drive URL
             if "drive.google.com" in self.model_url:
@@ -73,17 +73,48 @@ class ONNXModelLoader:
                     file_id = self.model_url.split("id=")[1].split("&")[0]
                 
                 if file_id:
-                    download_url = f"https://drive.google.com/uc?id={file_id}"
-                    gdown.download(download_url, self.model_path, quiet=False)
+                    # Use the download script logic
+                    session = requests.Session()
+                    URL = "https://drive.google.com/uc?export=download"
+                    response = session.get(URL, params={"id": file_id}, stream=True)
+                    
+                    # Check for confirmation token
+                    token = None
+                    for pattern in [r"confirm=([0-9A-Za-z-_]+)", r'name="confirm" value="([^"]+)"']:
+                        match = re.search(pattern, response.text)
+                        if match:
+                            token = match.group(1)
+                            break
+                    
+                    if token:
+                        logger.info("Large file detected, applying confirmation token...")
+                        response = session.get(URL, params={"id": file_id, "confirm": token}, stream=True)
+                    
+                    # Validate it's not HTML
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/html" in content_type.lower():
+                        raise ValueError("Received HTML instead of file (Drive blocked it)")
                 else:
-                    gdown.download(self.model_url, self.model_path, quiet=False)
+                    # Direct download
+                    response = requests.get(self.model_url, stream=True)
+                    response.raise_for_status()
             else:
-                # Direct download
+                # Direct download (not Google Drive)
                 response = requests.get(self.model_url, stream=True)
                 response.raise_for_status()
-                with open(self.model_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
+            
+            # Download the file
+            total_size = 0
+            with open(self.model_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=32768):
+                    if chunk:
                         f.write(chunk)
+                        total_size += len(chunk)
+            
+            if total_size < 100_000:
+                raise ValueError("Downloaded file is too small to be a valid ONNX model")
+            
+            logger.info(f"Model downloaded successfully: {self.model_path} ({total_size / 1024 / 1024:.2f} MB)")
         
         except Exception as e:
             logger.error(f"Error downloading model: {str(e)}")

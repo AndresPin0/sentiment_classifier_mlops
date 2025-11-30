@@ -6,8 +6,6 @@ import logging
 from datetime import datetime
 from typing import Optional
 import json
-import gdown
-import requests
 
 logger = logging.getLogger(__name__)
 
