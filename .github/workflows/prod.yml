@@ -146,15 +146,8 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:buildcache,mode=max
       
-      - name: Deploy to Railway
-        if: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          npm install -g @railway/cli
-          railway login --token ${{ secrets.RAILWAY_TOKEN }}
-          railway up --service sentiment-classifier-prod --detach
-      
       - name: Deploy to Render
-        if: ${{ secrets.RENDER_API_KEY && secrets.RENDER_SERVICE_ID }}
+        if: ${{ secrets.RENDER_API_KEY != '' && secrets.RENDER_SERVICE_ID != '' }}
         run: |
           curl -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
@@ -162,12 +155,12 @@ jobs:
             -d '{"clearCache": true}'
       
       - name: Deploy placeholder
-        if: ${{ !secrets.RAILWAY_TOKEN && !secrets.RENDER_API_KEY }}
+        if: ${{ secrets.RENDER_API_KEY == '' || secrets.RENDER_SERVICE_ID == '' }}
         run: |
           echo "No deployment service configured."
-          echo "Configure one of:"
-          echo "  - Railway: Add RAILWAY_TOKEN secret"
-          echo "  - Render: Add RENDER_API_KEY and RENDER_SERVICE_ID secrets"
+          echo "Configure Render deployment:"
+          echo "  - Add RENDER_API_KEY secret"
+          echo "  - Add RENDER_SERVICE_ID secret"
           echo ""
           echo "Docker image pushed to: ghcr.io/${{ github.repository_owner }}/sentiment-classifier-prod:latest"
 
