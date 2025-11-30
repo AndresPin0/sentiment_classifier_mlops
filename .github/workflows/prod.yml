@@ -99,31 +99,54 @@ jobs:
     if: github.ref == 'refs/heads/prod'
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Run container and log predictions
+      - name: Build Docker image (for predictions)
         run: |
-          docker run -d -p 8000:8000 \
+          docker build \
+            --build-arg MODEL_URL="${{ secrets.MODEL_URL }}" \
+            --build-arg ENVIRONMENT=prod \
+            -t sentiment-classifier-prod:latest .
+
+      - name: Run container and generate predictions
+        run: |
+          docker run -d \
+            -p 8000:8000 \
             -e MODEL_URL="${{ secrets.MODEL_URL }}" \
             -e ENVIRONMENT=prod \
             -e PREDICTIONS_PROD_FILE=/app/logs/predicciones_prod.txt \
             --name prod-container \
             sentiment-classifier-prod:latest
 
+          # Wait for app startup
           sleep 20
 
+          # Generate predictions
           curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Amazing service!"}'
           curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Completely unusable"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Outstanding quality!"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Very poor performance"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Exceeded expectations"}'
+          curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"text":"Worst purchase ever"}'
 
-          docker cp prod-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || true
+          # Copy log file and cleanup
+          docker cp prod-container:/app/logs/predicciones_prod.txt ./predicciones_prod.txt || \
+            echo "No predictions file found"
+
           docker stop prod-container || true
           docker rm prod-container || true
 
-      - name: Upload predictions to release (Prod)
+      - name: Upload predictions to GitHub Release (Prod)
         uses: softprops/action-gh-release@v1
         with:
           tag_name: prod-predictions-${{ github.run_number }}
           name: Prod Predictions
+          body: |
+            Predictions log from PROD environment
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref }}
+            Workflow: ${{ github.workflow }}
           files: predicciones_prod.txt
           prerelease: false
         env:
