@@ -148,7 +148,7 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/sentiment-classifier-dev:buildcache,mode=max
       
       - name: Deploy to Render
-        if: ${{ secrets.RENDER_API_KEY != '' && secrets.RENDER_SERVICE_ID != '' }}
+        if: secrets.RENDER_API_KEY != '' && secrets.RENDER_SERVICE_ID != ''
         run: |
           curl -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
@@ -156,7 +156,7 @@ jobs:
             -d '{"clearCache": true}'
       
       - name: Deploy placeholder
-        if: ${{ secrets.RENDER_API_KEY == '' || secrets.RENDER_SERVICE_ID == '' }}
+        if: secrets.RENDER_API_KEY == '' || secrets.RENDER_SERVICE_ID == ''
         run: |
           echo "No deployment service configured."
           echo "Configure Render deployment:"
