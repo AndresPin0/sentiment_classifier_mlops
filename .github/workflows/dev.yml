@@ -200,7 +200,7 @@ jobs:
       - name: Create or Update Release
         uses: softprops/action-gh-release@v1
         with:
-          tag: dev-predictions-${{ github.sha }}
+          tag_name: dev-predictions-${{ github.sha }}
           name: Dev Predictions - ${{ github.sha }}
           body: |
             Predictions log from dev environment

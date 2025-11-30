@@ -228,7 +228,7 @@ jobs:
       - name: Create or Update Release
         uses: softprops/action-gh-release@v1
         with:
-          tag: prod-predictions-${{ github.sha }}
+          tag_name: prod-predictions-${{ github.sha }}
           name: Prod Predictions - ${{ github.sha }}
           body: |
             Predictions log from production environment
