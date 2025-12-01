@@ -146,7 +146,7 @@ async def predict_batch(texts: List[str]):
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
 
 
-@app.get("/logs/download")
+@app.get("/logs/descargar")
 async def download_logs(environment: str = ENVIRONMENT):
     if environment not in ("dev", "prod"):
         raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'.")
