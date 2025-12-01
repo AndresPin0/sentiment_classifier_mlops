@@ -11,7 +11,7 @@ if env_path.exists():
     load_dotenv(env_path)
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from app.model_loader import ONNXModelLoader
@@ -144,6 +144,23 @@ async def predict_batch(texts: List[str]):
     except Exception as e:
         logger.error(f"Batch prediction error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch prediction failed: {str(e)}")
+
+
+@app.get("/logs/download")
+async def download_logs(environment: str = ENVIRONMENT):
+    if environment not in ("dev", "prod"):
+        raise HTTPException(status_code=400, detail="Invalid environment. Use 'dev' or 'prod'.")
+
+    file_path = PREDICTIONS_DEV_FILE if environment == "dev" else PREDICTIONS_PROD_FILE
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    return FileResponse(
+        path=file_path,
+        media_type="text/plain",
+        filename=os.path.basename(file_path)
+    )
 
 
 if __name__ == "__main__":
